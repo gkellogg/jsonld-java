@@ -163,6 +163,7 @@ public class Context extends LinkedHashMap<String, Object> {
      * @throws JsonLdError
      *             If there is an error parsing the contexts.
      */
+    // GK: Note that parsing may also depend on some options: `override protected and `propagate`
     private Context parse(Object localContext, List<String> remoteContexts,
             boolean parsingARemoteContext) throws JsonLdError {
         if (remoteContexts == null) {
@@ -170,6 +171,7 @@ public class Context extends LinkedHashMap<String, Object> {
         }
         // 1. Initialize result to the result of cloning active context.
         Context result = this.clone(); // TODO: clone?
+        // GK: note if localContext is a Map containing `@propagate` that value overrides the `propagate` option.
         // 2)
         if (!(localContext instanceof List)) {
             final Object temp = localContext;
@@ -180,6 +182,8 @@ public class Context extends LinkedHashMap<String, Object> {
         for (final Object context : ((List<Object>) localContext)) {
             // 3.1)
             if (context == null) {
+                // GK: Note, if active context has any protected terms, and `override protected` is not true, this should fail with 'invalid context nullification'.
+                // GK: Note, if `propagate` is false, the previous context should be associated with this new (null) context for potential rollback.
                 result = new Context(this.options);
                 continue;
             } else if (context instanceof Context) {
@@ -188,6 +192,7 @@ public class Context extends LinkedHashMap<String, Object> {
             // 3.2)
             else if (context instanceof String) {
                 String uri = (String) result.get(JsonLdConsts.BASE);
+                // GK: Note, the context needs to be resolved against the location of the file containing the reference, not the base association from the context. The spec defines a `context base` for this purpose.
                 uri = JsonLdUrl.resolve(uri, (String) context);
                 // 3.2.2
                 if (remoteContexts.contains(uri)) {
@@ -273,6 +278,8 @@ public class Context extends LinkedHashMap<String, Object> {
                 }
             }
 
+            // GK: There are more keys to be checked: `@import`, `@direction`, `@propagate` and `@version`.
+            // GK: You'll want some `processingMode` method to use when doing conditional checks; default value is `json-ld-1.1`, but can be overridden using an API option.
             // 3.7
             final Map<String, Boolean> defined = new LinkedHashMap<String, Boolean>();
             for (final String key : ((Map<String, Object>) context).keySet()) {
@@ -321,12 +328,14 @@ public class Context extends LinkedHashMap<String, Object> {
 
         defined.put(term, false);
 
+        // GK: Note, `@type` can also contain `@protected` in addition to `@container`. If `@container` is there, its value can only be `@set` (or `['@set']`).
         if (JsonLdUtils.isKeyword(term)
                 && !(options.getAllowContainerSetOnType() && JsonLdConsts.TYPE.equals(term)
                         && !(context.get(term)).toString().contains(JsonLdConsts.ID))) {
             throw new JsonLdError(Error.KEYWORD_REDEFINITION, term);
         }
 
+        // GK: Note, you'll need to retain any previous definition to make sure, if protected, that any new definition is compatible with it before ending this method.
         this.termDefinitions.remove(term);
         Object value = context.get(term);
         if (value == null || (value instanceof Map
@@ -415,6 +424,7 @@ public class Context extends LinkedHashMap<String, Object> {
         definition.put(JsonLdConsts.REVERSE, false);
 
         // 13)
+        // GK: Note, there are some required checks to be sure that if the associated term expands to an IRI, it is compatible with `@id` and some other checks.
         if (val.get(JsonLdConsts.ID) != null && !term.equals(val.get(JsonLdConsts.ID))) {
             if (!(val.get(JsonLdConsts.ID) instanceof String)) {
                 throw new JsonLdError(Error.INVALID_IRI_MAPPING,
@@ -458,6 +468,7 @@ public class Context extends LinkedHashMap<String, Object> {
         }
 
         // 16)
+        // GK: Note, `@container` can take on many more values, and be an array. Best always cast to an array and check to see if the container includes any useful value. There are also some checks to make sure that the content of `@context` is consistent.
         if (val.containsKey(JsonLdConsts.CONTAINER)) {
             final String container = (String) val.get(JsonLdConsts.CONTAINER);
             if (!JsonLdConsts.LIST.equals(container) && !JsonLdConsts.SET.equals(container)
@@ -485,6 +496,8 @@ public class Context extends LinkedHashMap<String, Object> {
             }
         }
 
+        // GK: Note, other keys to check for are `@index`, `@context` (which requires a recursive call to Context.parse to make sure it's valid), `@direction`, `@nest`, and `@prefix`.
+        // GK: Note, this is where to check if the previous definition exists and is protected, and we're not overriding protected, that the two definitions are essentially compatible.
         // 18)
         this.termDefinitions.put(term, definition);
         defined.put(term, true);
@@ -588,6 +601,7 @@ public class Context extends LinkedHashMap<String, Object> {
 
         // 2)
         if (relativeToVocab && getInverse().containsKey(iri)) {
+            // GK: Sadly, term selection has become much more involved in 1.1.
             // 2.1)
             String defaultLanguage = (String) this.get(JsonLdConsts.LANGUAGE);
             if (defaultLanguage == null) {
